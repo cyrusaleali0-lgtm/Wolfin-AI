@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Raycaster Maze</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #111;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        canvas {
+            background-color: #000;
+            border: 2px solid #fff;
+        }
+
+        #game-container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+
+        #message-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            border: 2px solid #fff;
+            padding: 20px;
+            text-align: center;
+            font-size: 2em;
+            display: none;
+            z-index: 10;
+        }
+
+        #controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="message-box"></div>
+    </div>
+    <div id="controls">
+        <p><strong>Controls:</strong></p>
+        <p>Move: <strong>W/S</strong> or <strong>Up/Down</strong> Arrows</p>
+        <p>Turn: <strong>A/D</strong> or <strong>Left/Right</strong> Arrows</p>
+        <p>Sprint: <strong>Shift</strong></p>
+    </div>
+
+    <script>
+        window.onload = function() {
+            // --- SETUP ---
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const messageBox = document.getElementById('message-box');
+            const gameContainer = document.getElementById('game-container');
+
+            const screenWidth = gameContainer.offsetWidth * 0.9;
+            const screenHeight = gameContainer.offsetHeight * 0.9;
+            canvas.width = screenWidth;
+            canvas.height = screenHeight;
+
+            showMessage("Loading...");
+
+            const map = [
+                "####################",
+                "#..................#",
+                "#S.................#",
+                "#..................#",
+                "#..........####....#",
+                "#..#..#..###.......#",
+                "#.....####.........#",
+                "#..................#",
+                "#..................#",
+                "####...............#",
+                "#..#..#..###.......#",
+                "####..####.........#",
+                "#..................E",
+                "#..................#",
+                "####################",
+            ];
+            const mapWidth = map[0].length;
+            const mapHeight = map.length;
+
+            let endPoint = null;
+
+            for (let y = 0; y < mapHeight; y++) {
+                for (let x = 0; x < mapWidth; x++) {
+                    if (map[y][x] === 'E') {
+                        endPoint = {
+                            x: x,
+                            y: y
+                        };
+                        break;
+                    }
+                }
+                if (endPoint) {
+                    break;
+                }
+            }
+
+            const player = {
+                x: 2.5,
+                y: 2.5,
+                dirX: 1,
+                dirY: 0,
+                planeX: 0,
+                planeY: 0.66,
+                moveSpeed: 0.05,
+                rotSpeed: 0.03
+            };
+
+            let gameWon = false;
+            const keys = {};
+            let isSprinting = false;
+
+            const wallTexture = new Image();
+            wallTexture.src = "https://img.freepik.com/premium-vector/seamless-pattern-with-modern-rectangular-brick-white-tiles-realistic-horizontal-texture-illustration_198278-512.jpg";
+
+            wallTexture.onload = () => {
+                hideMessage();
+                gameLoop();
+            };
+
+            // --- EVENT LISTENERS ---
+            document.addEventListener('keydown', e => {
+                keys[e.code] = true;
+                if (e.shiftKey) {
+                    isSprinting = true;
+                }
+            });
+            document.addEventListener('keyup', e => {
+                keys[e.code] = false;
+                if (!e.shiftKey) {
+                    isSprinting = false;
+                }
+            });
+
+            window.addEventListener('resize', () => {
+                const newWidth = gameContainer.offsetWidth * 0.9;
+                const newHeight = gameContainer.offsetHeight * 0.9;
+                canvas.width = newWidth;
+                canvas.height = newHeight;
+                render();
+            });
+
+            // --- GAME LOOP ---
+            function gameLoop() {
+                if (!gameWon) {
+                    handleInput();
+                    checkWinCondition();
+                    render();
+                    requestAnimationFrame(gameLoop);
+                }
+            }
+
+            // --- INPUT HANDLING ---
+            function handleInput() {
+                const boostSpeed = isSprinting ? player.moveSpeed * 1.5 : player.moveSpeed;
+                const rotSpeed = player.rotSpeed;
+
+                let newX = player.x;
+                let newY = player.y;
+
+                if (keys['KeyW'] || keys['ArrowUp']) {
+                    newX = player.x + player.dirX * boostSpeed;
+                    newY = player.y + player.dirY * boostSpeed;
+                }
+                if (keys['KeyS'] || keys['ArrowDown']) {
+                    newX = player.x - player.dirX * boostSpeed;
+                    newY = player.y - player.dirY * boostSpeed;
+                }
+
+                if (map[Math.floor(player.y)][Math.floor(newX)] !== '#') {
+                    player.x = newX;
+                }
+
+                if (map[Math.floor(newY)][Math.floor(player.x)] !== '#') {
+                    player.y = newY;
+                }
+
+                if (keys['KeyA'] || keys['ArrowLeft']) {
+                    const oldDirX = player.dirX;
+                    player.dirX = player.dirX * Math.cos(-rotSpeed) - player.dirY * Math.sin(-rotSpeed);
+                    player.dirY = oldDirX * Math.sin(-rotSpeed) + player.dirY * Math.cos(-rotSpeed);
+                    const oldPlaneX = player.planeX;
+                    player.planeX = player.planeX * Math.cos(-rotSpeed) - player.planeY * Math.sin(-rotSpeed);
+                    player.planeY = oldPlaneX * Math.sin(-rotSpeed) + player.planeY * Math.cos(-rotSpeed);
+                }
+                if (keys['KeyD'] || keys['ArrowRight']) {
+                    const oldDirX = player.dirX;
+                    player.dirX = player.dirX * Math.cos(rotSpeed) - player.dirY * Math.sin(rotSpeed);
+                    player.dirY = oldDirX * Math.sin(rotSpeed) + player.dirY * Math.cos(rotSpeed);
+                    const oldPlaneX = player.planeX;
+                    player.planeX = player.planeX * Math.cos(rotSpeed) - player.planeY * Math.sin(rotSpeed);
+                    player.planeY = oldPlaneX * Math.sin(rotSpeed) + player.planeY * Math.cos(rotSpeed);
+                }
+            }
+
+            // --- WIN CONDITION CHECK ---
+            function checkWinCondition() {
+                const distToEnd = Math.sqrt(Math.pow(player.x - endPoint.x, 2) + Math.pow(player.y - endPoint.y, 2));
+                if (distToEnd < 0.5) {
+                    gameWon = true;
+                    showMessage("You Win!");
+                }
+            }
+
+            // --- DISPLAY MESSAGE ---
+            function showMessage(text) {
+                messageBox.textContent = text;
+                messageBox.style.display = 'block';
+            }
+
+            function hideMessage() {
+                messageBox.style.display = 'none';
+            }
+
+            // --- RENDERING ---
+            function render() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = '#404040';
+                ctx.fillRect(0, 0, canvas.width, canvas.height / 2);
+                ctx.fillStyle = '#964B00';
+                ctx.fillRect(0, canvas.height / 2, canvas.width, canvas.height / 2);
+
+                for (let x = 0; x < canvas.width; x++) {
+                    const cameraX = 2 * x / canvas.width - 1;
+                    const rayDirX = player.dirX + player.planeX * cameraX;
+                    const rayDirY = player.dirY + player.planeY * cameraX;
+
+                    let mapX = Math.floor(player.x);
+                    let mapY = Math.floor(player.y);
+
+                    const deltaDistX = (rayDirX === 0) ? 1e30 : Math.abs(1 / rayDirX);
+                    const deltaDistY = (rayDirY === 0) ? 1e30 : Math.abs(1 / rayDirY);
+
+                    let sideDistX;
+                    let sideDistY;
+
+                    const stepX = (rayDirX < 0) ? -1 : 1;
+                    const stepY = (rayDirY < 0) ? -1 : 1;
+
+                    if (rayDirX < 0) {
+                        sideDistX = (player.x - mapX) * deltaDistX;
+                    } else {
+                        sideDistX = (mapX + 1.0 - player.x) * deltaDistX;
+                    }
+                    if (rayDirY < 0) {
+                        sideDistY = (player.y - mapY) * deltaDistY;
+                    } else {
+                        sideDistY = (mapY + 1.0 - player.y) * deltaDistY;
+                    }
+
+                    let hit = 0;
+                    let side;
+
+                    while (hit === 0) {
+                        if (sideDistX < sideDistY) {
+                            sideDistX += deltaDistX;
+                            mapX += stepX;
+                            side = 0;
+                        } else {
+                            sideDistY += deltaDistY;
+                            mapY += stepY;
+                            side = 1;
+                        }
+
+                        if (mapX >= 0 && mapX < mapWidth && mapY >= 0 && mapY < mapHeight && map[mapY][mapX] === '#') {
+                            hit = 1;
+                        } else if (mapX < 0 || mapX >= mapWidth || mapY < 0 || mapY >= mapHeight) {
+                            break;
+                        }
+                    }
+
+                    let perpWallDist;
+                    if (hit === 1) {
+                        if (side === 0) {
+                            perpWallDist = (sideDistX - deltaDistX);
+                        } else {
+                            perpWallDist = (sideDistY - deltaDistY);
+                        }
+                    } else {
+                        perpWallDist = 1e30;
+                    }
+
+                    const lineHeight = Math.floor(canvas.height / perpWallDist);
+                    const drawStart = -lineHeight / 2 + canvas.height / 2;
+                    const drawEnd = lineHeight / 2 + canvas.height / 2;
+
+                    let wallX;
+                    if (side === 0) {
+                        wallX = player.y + perpWallDist * rayDirY;
+                    } else {
+                        wallX = player.x + perpWallDist * rayDirX;
+                    }
+                    wallX -= Math.floor(wallX);
+
+                    const texX = Math.floor(wallX * wallTexture.width);
+
+                    const sourceX = texX;
+                    const sourceY = 0;
+                    const sourceWidth = 1;
+                    const sourceHeight = wallTexture.height;
+
+                    const destX = x;
+                    const destY = drawStart;
+                    const destWidth = 1;
+                    const destHeight = drawEnd - drawStart;
+
+                    // Simple shading based on distance and side
+                    let shade = 1.0;
+                    if (side === 1) {
+                        shade *= 0.7; // Darker for Y walls
+                    }
+                    // Darken based on distance (further = darker)
+                    shade *= Math.max(0.3, 1.0 - perpWallDist / 10.0);
+
+                    if (destHeight > 0) {
+                        ctx.drawImage(wallTexture, sourceX, sourceY, sourceWidth, sourceHeight, destX, destY, destWidth, destHeight);
+                        
+                        // Apply shading as a dark overlay
+                        ctx.fillStyle = `rgba(0, 0, 0, ${1 - shade})`;
+                        ctx.fillRect(destX, destY, destWidth, destHeight);
+                    }
+                }
+            }
+        };
+    </script>
+</body>
+
+</html>
