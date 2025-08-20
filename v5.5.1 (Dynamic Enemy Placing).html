@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Raycaster Maze</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #111;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        canvas {
+            background-color: #000;
+            border: 2px solid #fff;
+        }
+
+        #game-container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+
+        #message-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            border: 2px solid #fff;
+            padding: 20px;
+            text-align: center;
+            font-size: 2em;
+            display: none;
+            z-index: 10;
+        }
+
+        #controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+        
+        #reset-button {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background-color: #333;
+            color: white;
+            border: 2px solid #fff;
+            border-radius: 5px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        #reset-button:hover {
+            background-color: #555;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="message-box"></div>
+    </div>
+    <div id="controls">
+        <p><strong>Controls:</strong></p>
+        <p>Move: <strong>W/S</strong> or <strong>Up/Down</strong> Arrows</p>
+        <p>Turn: <strong>A/D</strong> or <strong>Left/Right</strong> Arrows</p>
+        <p>Sprint: <strong>Shift</strong></p>
+        <p>Attack: <strong>Space</strong></p>
+        <button id="reset-button">Reset Game</button>
+    </div>
+
+    <script>
+        window.onload = function() {
+            // --- SETUP ---
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const messageBox = document.getElementById('message-box');
+            const gameContainer = document.getElementById('game-container');
+            const resetButton = document.getElementById('reset-button');
+
+            const screenWidth = gameContainer.offsetWidth * 0.9;
+            const screenHeight = gameContainer.offsetHeight * 0.9;
+            canvas.width = screenWidth;
+            canvas.height = screenHeight;
+
+            showMessage("Loading...");
+
+            const map = [
+                "####################",
+                "#.V................#",
+                "#..................#",
+                "#..................#",
+                "#..................#",
+                "#..................#",
+                "#..................#",
+                "#..................#",
+                "#.................S#",
+                "########E###########",
+            ];
+            const mapWidth = map[0].length;
+            const mapHeight = map.length;
+
+            let endPoint = null;
+            let startPoint = null;
+            let enemySpawnPoints = [];
+
+            // Find start (S), end (E), and enemy spawn (V) points in the map
+            for (let y = 0; y < mapHeight; y++) {
+                for (let x = 0; x < mapWidth; x++) {
+                    if (map[y][x] === 'E') {
+                        endPoint = {
+                            x: x,
+                            y: y
+                        };
+                    } else if (map[y][x] === 'S') {
+                        startPoint = {
+                            x: x + 0.5,  // Add 0.5 to center in the cell
+                            y: y + 0.5   // Add 0.5 to center in the cell
+                        };
+                    } else if (map[y][x] === 'V') {
+                        enemySpawnPoints.push({
+                            x: x + 0.5,  // Add 0.5 to center in the cell
+                            y: y + 0.5   // Add 0.5 to center in the cell
+                        });
+                    }
+                }
+            }
+
+            // Store initial player state for reset
+            const initialPlayerState = {
+                x: startPoint.x,
+                y: startPoint.y,
+                dirX: 1,
+                dirY: 0,
+                planeX: 0,
+                planeY: 0.66,
+                moveSpeed: 0.05,
+                rotSpeed: 0.03,
+                size: 0.3
+            };
+
+            let player = {...initialPlayerState};
+            let gameWon = false;
+            const keys = {};
+            let isSprinting = false;
+            let gameLoopId = null;
+
+            const wallTexture = new Image();
+            wallTexture.src = "https://img.freepik.com/premium-vector/seamless-pattern-with-modern-rectangular-brick-white-tiles-realistic-horizontal-texture-illustration_198278-512.jpg";
+
+            const enemySprite = new Image();
+            enemySprite.src = "https://static.wikia.nocookie.net/villainsfanon/images/4/4e/Troll-Face-Meme-PNG.png/revision/latest/thumbnail/width/360/height/360?cb=20240803095204";
+
+            // Enemy class
+            class Enemy {
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                    this.health = 100;
+                    this.maxHealth = 100;
+                    this.speed = 0.02;
+                    this.direction = Math.random() * Math.PI * 2; // Random initial direction
+                    this.changeDirectionTimer = 0;
+                    this.changeDirectionInterval = 120; // Change direction every 2 seconds at 60fps
+                    this.alive = true;
+                    this.size = 0.3; // Size for collision detection
+                }
+
+                update() {
+                    if (!this.alive) return;
+
+                    // Simple AI: change direction periodically
+                    this.changeDirectionTimer++;
+                    if (this.changeDirectionTimer >= this.changeDirectionInterval) {
+                        this.direction = Math.random() * Math.PI * 2;
+                        this.changeDirectionTimer = 0;
+                    }
+
+                    // Calculate new position
+                    const newX = this.x + Math.cos(this.direction) * this.speed;
+                    const newY = this.y + Math.sin(this.direction) * this.speed;
+
+                    // Check wall collision
+                    if (map[Math.floor(newY)] && map[Math.floor(newY)][Math.floor(newX)] !== '#') {
+                        this.x = newX;
+                        this.y = newY;
+                    } else {
+                        // Hit a wall, change direction
+                        this.direction = Math.random() * Math.PI * 2;
+                    }
+
+                    // Keep enemy within map bounds
+                    if (this.x < 1) this.x = 1;
+                    if (this.x > mapWidth - 1) this.x = mapWidth - 1;
+                    if (this.y < 1) this.y = 1;
+                    if (this.y > mapHeight - 1) this.y = mapHeight - 1;
+                }
+
+                takeDamage(damage) {
+                    if (!this.alive) return;
+                    this.health -= damage;
+                    if (this.health <= 0) {
+                        this.health = 0;
+                        this.alive = false;
+                    }
+                }
+
+                getDistanceToPlayer() {
+                    return Math.sqrt(Math.pow(this.x - player.x, 2) + Math.pow(this.y - player.y, 2));
+                }
+            }
+
+            // Create enemies
+            let enemies = enemySpawnPoints.map(point => new Enemy(point.x, point.y));
+
+            // Store initial enemy states for reset
+            const initialEnemyStates = enemySpawnPoints;
+
+            let imagesLoaded = 0;
+            const totalImages = 2;
+
+            function checkImagesLoaded() {
+                imagesLoaded++;
+                if (imagesLoaded >= totalImages) {
+                    hideMessage();
+                    gameLoopId = requestAnimationFrame(gameLoop);
+                }
+            }
+
+            wallTexture.onload = checkImagesLoaded;
+            enemySprite.onload = checkImagesLoaded;
+
+            // --- EVENT LISTENERS ---
+            document.addEventListener('keydown', e => {
+                keys[e.code] = true;
+                if (e.shiftKey) {
+                    isSprinting = true;
+                }
+                if (e.code === 'Space') {
+                    attackEnemies();
+                }
+            });
+            document.addEventListener('keyup', e => {
+                keys[e.code] = false;
+                if (!e.shiftKey) {
+                    isSprinting = false;
+                }
+            });
+
+            resetButton.addEventListener('click', resetGame);
+
+            window.addEventListener('resize', () => {
+                const newWidth = gameContainer.offsetWidth * 0.9;
+                const newHeight = gameContainer.offsetHeight * 0.9;
+                canvas.width = newWidth;
+                canvas.height = newHeight;
+                render();
+            });
+
+            // --- RESET FUNCTION ---
+            function resetGame() {
+                // Cancel any running game loop
+                if (gameLoopId) {
+                    cancelAnimationFrame(gameLoopId);
+                }
+                
+                // Reset player to initial state
+                player = {...initialPlayerState};
+                
+                // Reset game state
+                gameWon = false;
+                
+                // Clear any keys that might be pressed
+                for (let key in keys) {
+                    keys[key] = false;
+                }
+                isSprinting = false;
+                
+                // Hide win message
+                hideMessage();
+                
+                // Reset enemies
+                enemies = initialEnemyStates.map(state => new Enemy(state.x, state.y));
+                
+                // Restart the game loop
+                gameLoopId = requestAnimationFrame(gameLoop);
+            }
+
+            // --- GAME LOOP ---
+            function gameLoop() {
+                if (!gameWon) {
+                    handleInput();
+                    checkWinCondition();
+                    updateEnemies();
+                    checkCollisions();
+                    render();
+                    gameLoopId = requestAnimationFrame(gameLoop);
+                }
+            }
+
+            // --- INPUT HANDLING ---
+            function handleInput() {
+                const boostSpeed = isSprinting ? player.moveSpeed * 1.5 : player.moveSpeed;
+                const rotSpeed = player.rotSpeed;
+
+                let newX = player.x;
+                let newY = player.y;
+
+                if (keys['KeyW'] || keys['ArrowUp']) {
+                    newX = player.x + player.dirX * boostSpeed;
+                    newY = player.y + player.dirY * boostSpeed;
+                }
+                if (keys['KeyS'] || keys['ArrowDown']) {
+                    newX = player.x - player.dirX * boostSpeed;
+                    newY = player.y - player.dirY * boostSpeed;
+                }
+
+                if (map[Math.floor(player.y)][Math.floor(newX)] !== '#') {
+                    player.x = newX;
+                }
+
+                if (map[Math.floor(newY)][Math.floor(player.x)] !== '#') {
+                    player.y = newY;
+                }
+
+                if (keys['KeyA'] || keys['ArrowLeft']) {
+                    const oldDirX = player.dirX;
+                    player.dirX = player.dirX * Math.cos(-rotSpeed) - player.dirY * Math.sin(-rotSpeed);
+                    player.dirY = oldDirX * Math.sin(-rotSpeed) + player.dirY * Math.cos(-rotSpeed);
+                    const oldPlaneX = player.planeX;
+                    player.planeX = player.planeX * Math.cos(-rotSpeed) - player.planeY * Math.sin(-rotSpeed);
+                    player.planeY = oldPlaneX * Math.sin(-rotSpeed) + player.planeY * Math.cos(-rotSpeed);
+                }
+                if (keys['KeyD'] || keys['ArrowRight']) {
+                    const oldDirX = player.dirX;
+                    player.dirX = player.dirX * Math.cos(rotSpeed) - player.dirY * Math.sin(rotSpeed);
+                    player.dirY = oldDirX * Math.sin(rotSpeed) + player.dirY * Math.cos(rotSpeed);
+                    const oldPlaneX = player.planeX;
+                    player.planeX = player.planeX * Math.cos(rotSpeed) - player.planeY * Math.sin(rotSpeed);
+                    player.planeY = oldPlaneX * Math.sin(rotSpeed) + player.planeY * Math.cos(rotSpeed);
+                }
+            }
+
+            // --- WIN CONDITION CHECK ---
+            function checkWinCondition() {
+                const distToEnd = Math.sqrt(Math.pow(player.x - endPoint.x, 2) + Math.pow(player.y - endPoint.y, 2));
+                if (distToEnd < 0.5) {
+                    gameWon = true;
+                    showMessage("You Win!");
+                }
+            }
+
+            // --- DISPLAY MESSAGE ---
+            function showMessage(text) {
+                messageBox.textContent = text;
+                messageBox.style.display = 'block';
+            }
+
+            function hideMessage() {
+                messageBox.style.display = 'none';
+            }
+
+            // --- ENEMY UPDATE ---
+            function updateEnemies() {
+                for (let enemy of enemies) {
+                    enemy.update();
+                }
+            }
+
+            // --- COLLISION DETECTION ---
+            function checkCollisions() {
+                for (let enemy of enemies) {
+                    if (enemy.getDistanceToPlayer() < (player.size + enemy.size)) {
+                        // Handle collision
+                        console.log("Collision detected!");
+                    }
+                }
+            }
+
+            // --- ATTACK MECHANISM ---
+            function attackEnemies() {
+                for (let enemy of enemies) {
+                    if (enemy.getDistanceToPlayer() < 1.5) {
+                        enemy.takeDamage(20);
+                        console.log("Enemy attacked!");
+                    }
+                }
+            }
+
+            // --- RENDERING ---
+            function render() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = '#404040';
+                ctx.fillRect(0, 0, canvas.width, canvas.height / 2);
+                ctx.fillStyle = '#452301';
+                ctx.fillRect(0, canvas.height / 2, canvas.width, canvas.height / 2);
+
+                for (let x = 0; x < canvas.width; x++) {
+                    const cameraX = 2 * x / canvas.width - 1;
+                    const rayDirX = player.dirX + player.planeX * cameraX;
+                    const rayDirY = player.dirY + player.planeY * cameraX;
+
+                    let mapX = Math.floor(player.x);
+                    let mapY = Math.floor(player.y);
+
+                    const deltaDistX = (rayDirX === 0) ? 1e30 : Math.abs(1 / rayDirX);
+                    const deltaDistY = (rayDirY === 0) ? 1e30 : Math.abs(1 / rayDirY);
+
+                    let sideDistX;
+                    let sideDistY;
+
+                    const stepX = (rayDirX < 0) ? -1 : 1;
+                    const stepY = (rayDirY < 0) ? -1 : 1;
+
+                    if (rayDirX < 0) {
+                        sideDistX = (player.x - mapX) * deltaDistX;
+                    } else {
+                        sideDistX = (mapX + 1.0 - player.x) * deltaDistX;
+                    }
+                    if (rayDirY < 0) {
+                        sideDistY = (player.y - mapY) * deltaDistY;
+                    } else {
+                        sideDistY = (mapY + 1.0 - player.y) * deltaDistY;
+                    }
+
+                    let hit = 0;
+                    let side;
+
+                    while (hit === 0) {
+                        if (sideDistX < sideDistY) {
+                            sideDistX += deltaDistX;
+                            mapX += stepX;
+                            side = 0;
+                        } else {
+                            sideDistY += deltaDistY;
+                            mapY += stepY;
+                            side = 1;
+                        }
+
+                        if (mapX >= 0 && mapX < mapWidth && mapY >= 0 && mapY < mapHeight && map[mapY][mapX] === '#') {
+                            hit = 1;
+                        } else if (mapX < 0 || mapX >= mapWidth || mapY < 0 || mapY >= mapHeight) {
+                            break;
+                        }
+                    }
+
+                    let perpWallDist;
+                    if (hit === 1) {
+                        if (side === 0) {
+                            perpWallDist = (sideDistX - deltaDistX);
+                        } else {
+                            perpWallDist = (sideDistY - deltaDistY);
+                        }
+                    } else {
+                        perpWallDist = 1e30;
+                    }
+
+                    const lineHeight = Math.floor(canvas.height / perpWallDist);
+                    const drawStart = -lineHeight / 2 + canvas.height / 2;
+                    const drawEnd = lineHeight / 2 + canvas.height / 2;
+
+                    let wallX;
+                    if (side === 0) {
+                        wallX = player.y + perpWallDist * rayDirY;
+                    } else {
+                        wallX = player.x + perpWallDist * rayDirX;
+                    }
+                    wallX -= Math.floor(wallX);
+
+                    const texX = Math.floor(wallX * wallTexture.width);
+
+                    const sourceX = texX;
+                    const sourceY = 0;
+                    const sourceWidth = 1;
+                    const sourceHeight = wallTexture.height;
+
+                    const destX = x;
+                    const destY = drawStart;
+                    const destWidth = 1;
+                    const destHeight = drawEnd - drawStart;
+
+                    // Simple shading based on distance and side
+                    let shade = 1.0;
+                    if (side === 1) {
+                        shade *= 0.7; // Darker for Y walls
+                    }
+                    // Darken based on distance (further = darker)
+                    shade *= Math.max(0.3, 1.0 - perpWallDist / 10.0);
+
+                    if (destHeight > 0) {
+                        ctx.drawImage(wallTexture, sourceX, sourceY, sourceWidth, sourceHeight, destX, destY, destWidth, destHeight);
+                        
+                        // Apply shading as a dark overlay
+                        ctx.fillStyle = `rgba(0, 0, 0, ${1 - shade})`;
+                        ctx.fillRect(destX, destY, destWidth, destHeight);
+                    }
+                }
+
+                // Render enemies as sprites in 3D space
+                for (let enemy of enemies) {
+                    if (!enemy.alive) continue;
+
+                    // Calculate sprite position relative to player
+                    const spriteX = enemy.x - player.x;
+                    const spriteY = enemy.y - player.y;
+
+                    // Transform sprite with inverse camera matrix
+                    const invDet = 1.0 / (player.planeX * player.dirY - player.dirX * player.planeY);
+                    const transformX = invDet * (player.dirY * spriteX - player.dirX * spriteY);
+                    const transformY = invDet * (-player.planeY * spriteX + player.planeX * spriteY);
+
+                    // Skip if sprite is behind player
+                    if (transformY <= 0) continue;
+
+                    const spriteScreenX = Math.floor((canvas.width / 2) * (1 + transformX / transformY));
+
+                    // Calculate sprite dimensions
+                    const spriteScale = Math.abs(Math.floor(canvas.height / transformY));
+                    const spriteWidth = spriteScale;
+                    const spriteHeight = spriteScale;
+
+                    // Calculate draw start and end positions
+                    const drawStartY = Math.floor(-spriteHeight / 2 + canvas.height / 2);
+                    const drawEndY = Math.floor(spriteHeight / 2 + canvas.height / 2);
+                    const drawStartX = Math.floor(-spriteWidth / 2 + spriteScreenX);
+                    const drawEndX = Math.floor(spriteWidth / 2 + spriteScreenX);
+
+                    // Only draw if sprite is visible on screen
+                    if (drawEndX >= 0 && drawStartX < canvas.width && drawEndY >= 0 && drawStartY < canvas.height) {
+                        // Calculate clipping
+                        const clampedStartX = Math.max(0, drawStartX);
+                        const clampedEndX = Math.min(canvas.width, drawEndX);
+                        const clampedStartY = Math.max(0, drawStartY);
+                        const clampedEndY = Math.min(canvas.height, drawEndY);
+
+                        // Calculate what portion of the source image to draw
+                        const leftClip = clampedStartX - drawStartX;
+                        const rightClip = drawEndX - clampedEndX;
+                        const topClip = clampedStartY - drawStartY;
+                        const bottomClip = drawEndY - clampedEndY;
+
+                        const sourceX = (leftClip / spriteWidth) * enemySprite.width;
+                        const sourceY = (topClip / spriteHeight) * enemySprite.height;
+                        const sourceWidth = ((spriteWidth - leftClip - rightClip) / spriteWidth) * enemySprite.width;
+                        const sourceHeight = ((spriteHeight - topClip - bottomClip) / spriteHeight) * enemySprite.height;
+
+                        const destWidth = clampedEndX - clampedStartX;
+                        const destHeight = clampedEndY - clampedStartY;
+
+                        if (destWidth > 0 && destHeight > 0 && sourceWidth > 0 && sourceHeight > 0) {
+                            // Apply distance-based shading
+                            const distance = transformY;
+                            const shade = Math.max(0.3, 1.0 - distance / 8.0);
+                            
+                            ctx.save();
+                            ctx.globalAlpha = shade;
+
+                            ctx.drawImage(
+                                enemySprite,
+                                sourceX, sourceY, sourceWidth, sourceHeight,
+                                clampedStartX, clampedStartY, destWidth, destHeight
+                            );
+                            ctx.restore();
+
+                            // Draw health bar above enemy
+                            if (enemy.health < enemy.maxHealth) {
+                                const healthBarWidth = spriteWidth * 0.8;
+                                const healthBarHeight = 4;
+                                const healthBarX = spriteScreenX - healthBarWidth / 2;
+                                const healthBarY = drawStartY - 10;
+
+                                if (healthBarY >= 0 && healthBarY < canvas.height) {
+                                    // Background
+                                    ctx.fillStyle = 'red';
+                                    ctx.fillRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight);
+                                    
+                                    // Health
+                                    ctx.fillStyle = 'green';
+                                    const healthWidth = (enemy.health / enemy.maxHealth) * healthBarWidth;
+                                    ctx.fillRect(healthBarX, healthBarY, healthWidth, healthBarHeight);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    </script>
+</body>
+
+</html>
